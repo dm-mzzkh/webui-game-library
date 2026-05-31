@@ -1,0 +1,47 @@
+- name: Harden SSH on bastion
+  hosts: bastion
+  become: true
+  handlers:
+    - name: Reload sshd
+      ansible.builtin.service:
+        name: ssh
+        state: reloaded
+
+  tasks:
+    - name: Ensure uploader user exists
+      ansible.builtin.user:
+        name: "{{ uploader_user }}"
+        shell: /bin/bash
+        create_home: true
+
+    - name: Install uploader public key on findland
+      ansible.posix.authorized_key:
+        user: "{{ uploader_user }}"
+        key: "{{ lookup('file', 'deploy_key/github_deploy.pub') }}"
+        state: present
+        exclusive: false
+
+    - name: Restrict SSH access for uploader
+      blockinfile:
+        path: /etc/ssh/sshd_config
+        block: |
+          Match User uploader
+              AllowTcpForwarding no
+              X11Forwarding no
+              PermitTTY no
+
+    - name: Deploy hardened sshd drop-in
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/10-key-only.conf
+        mode: "0644"
+        content: |
+          PubkeyAuthentication yes
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          ChallengeResponseAuthentication no
+          AuthenticationMethods publickey
+          PermitRootLogin prohibit-password
+          UsePAM yes
+        validate: "/usr/sbin/sshd -t -f %s"
+      notify: Reload sshd
+

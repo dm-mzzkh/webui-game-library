@@ -1,0 +1,178 @@
+---
+- name: VPN Infra Bootstrap (clean production)
+  hosts: boot
+  become: true
+
+  vars:
+    timezone: UTC
+
+  tasks:
+
+  # -----------------------------
+  # SYSTEM UPDATE
+  # -----------------------------
+  - name: Update apt cache
+    apt:
+      update_cache: yes
+      cache_valid_time: 3600
+
+  - name: Upgrade system
+    apt:
+      upgrade: dist
+
+  # -----------------------------
+  # CLEAN CONFLICTS (IMPORTANT)
+  # -----------------------------
+  - name: Remove conflicting docker packages
+    apt:
+      name:
+        - docker.io
+        - containerd
+      state: absent
+      purge: yes
+    ignore_errors: yes
+
+  # -----------------------------
+  # BASE PACKAGES
+  # -----------------------------
+  - name: Install base dependencies
+    apt:
+      name:
+        - curl
+        - git
+        - ufw
+        - fail2ban
+        - htop
+        - vim
+        - ca-certificates
+        - gnupg
+        - lsb-release
+      state: present
+
+  # -----------------------------
+  # DOCKER (OFFICIAL REPO)
+  # -----------------------------
+  - name: Add Docker GPG key
+    apt_key:
+      url: https://download.docker.com/linux/ubuntu/gpg
+      state: present
+
+  - name: Add Docker repo (deb822)
+    copy:
+      dest: /etc/apt/sources.list.d/docker.sources
+      content: |
+        Types: deb
+        URIs: https://download.docker.com/linux/ubuntu
+        Suites: {{ ansible_distribution_release }}
+        Components: stable
+        Architectures: amd64
+        Signed-By: /etc/apt/keyrings/docker.gpg
+
+  - name: Install Docker CE
+    apt:
+      name:
+        - docker-ce
+        - docker-ce-cli
+        - containerd.io
+        - docker-compose-plugin
+      state: present
+      update_cache: yes
+
+  - name: Enable Docker
+    systemd:
+      name: docker
+      enabled: yes
+      state: started
+
+  # -----------------------------
+  # USER SETUP
+  # -----------------------------
+  - name: Create admin user
+    user:
+      name: vpnadmin
+      groups: sudo,docker
+      append: yes
+      shell: /bin/bash
+      create_home: yes
+
+  - name: Add SSH key
+    authorized_key:
+      user: vpnadmin
+      key: "{{ lookup('file', ansible_ssh_private_key_file + '.pub') }}"
+
+  - name: Ensure vpnadmin has passwordless sudo
+    ansible.builtin.copy:
+      dest: /etc/sudoers.d/vpnadmin
+      content: "vpnadmin ALL=(ALL) NOPASSWD:ALL\n"
+      owner: root
+      group: root
+      mode: "0440"
+      validate: "/usr/sbin/visudo -cf %s"
+
+
+  # -----------------------------
+  # TIME / SYSCTL
+  # -----------------------------
+  - name: Set timezone
+    timezone:
+      name: "{{ timezone }}"
+
+  - name: Enable BBR congestion control
+    sysctl:
+      name: net.ipv4.tcp_congestion_control
+      value: bbr
+      state: present
+      reload: yes
+
+  - name: Enable fq qdisc
+    sysctl:
+      name: net.core.default_qdisc
+      value: fq
+      state: present
+      reload: yes
+
+  # -----------------------------
+  # FIREWALL (SAFE DEFAULT)
+  # -----------------------------
+  - name: UFW default deny incoming
+    ufw:
+      policy: deny
+      direction: incoming
+
+  - name: UFW allow outgoing
+    ufw:
+      policy: allow
+      direction: outgoing
+
+  - name: Allow SSH via Tailscale only
+    ufw:
+      rule: allow
+      direction: in
+      interface: tailscale0
+      port: "22"
+      proto: tcp
+
+
+  - name: Allow HTTP
+    ufw:
+      rule: allow
+      port: "80"
+
+  - name: Allow HTTPS
+    ufw:
+      rule: allow
+      port: "443"
+
+  - name: Enable UFW
+    ufw:
+      state: enabled
+
+  # -----------------------------
+  # FAIL2BAN
+  # -----------------------------
+  - name: Enable fail2ban
+    systemd:
+      name: fail2ban
+      enabled: yes
+      state: started
+  

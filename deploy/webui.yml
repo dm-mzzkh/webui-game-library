@@ -1,0 +1,109 @@
+- name: Deploy WebUI game library
+  hosts: storage_host
+  become: true
+
+  vars:
+    webui_user: webui
+    webui_dir: /opt/webui-game-library
+    games_dir: /srv/games          # must match the CI DEPLOY_PATH on this host
+    webui_port: 8080
+    site_title: "Game Library"
+    node_major: 20
+
+  tasks:
+    - name: Install Node.js apt repo
+      ansible.builtin.shell: |
+        curl -fsSL https://deb.nodesource.com/setup_{{ node_major }}.x | bash -
+      args:
+        creates: /etc/apt/sources.list.d/nodesource.list
+
+    - name: Install Node.js
+      ansible.builtin.package:
+        name: nodejs
+        state: present
+
+    - name: Create service user
+      ansible.builtin.user:
+        name: "{{ webui_user }}"
+        system: true
+        shell: /usr/sbin/nologin
+        create_home: false
+
+    - name: Create app directory
+      ansible.builtin.file:
+        path: "{{ webui_dir }}"
+        state: directory
+        owner: "{{ webui_user }}"
+        group: "{{ webui_user }}"
+        mode: "0755"
+
+    - name: Copy WebUI sources
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../webui/"
+        dest: "{{ webui_dir }}/"
+        owner: "{{ webui_user }}"
+        group: "{{ webui_user }}"
+        mode: "0644"
+        directory_mode: "0755"
+      notify: Restart webui
+
+    - name: Install npm dependencies
+      community.general.npm:
+        path: "{{ webui_dir }}"
+        production: true
+      become_user: "{{ webui_user }}"
+      notify: Restart webui
+
+    - name: Allow service user to read the games directory
+      ansible.builtin.file:
+        path: "{{ games_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Install systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/webui-game-library.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=WebUI Game Library
+          After=network.target
+
+          [Service]
+          Type=simple
+          User={{ webui_user }}
+          WorkingDirectory={{ webui_dir }}
+          Environment=PORT={{ webui_port }}
+          Environment=GAMES_DIR={{ games_dir }}
+          Environment=SITE_TITLE={{ site_title }}
+          ExecStart=/usr/bin/node {{ webui_dir }}/server.js
+          Restart=on-failure
+          RestartSec=3
+          # Hardening
+          NoNewPrivileges=true
+          ProtectSystem=strict
+          ProtectHome=true
+          PrivateTmp=true
+          ReadOnlyPaths={{ games_dir }}
+
+          [Install]
+          WantedBy=multi-user.target
+      notify:
+        - Reload systemd
+        - Restart webui
+
+    - name: Enable and start webui
+      ansible.builtin.systemd:
+        name: webui-game-library
+        enabled: true
+        state: started
+
+  handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Restart webui
+      ansible.builtin.systemd:
+        name: webui-game-library
+        state: restarted

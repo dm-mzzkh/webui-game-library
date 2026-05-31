@@ -1,0 +1,46 @@
+- name: Setup storage server
+  hosts: storage_host
+  become: true
+
+  vars:
+    ssh_service: "{{ 'ssh' if ansible_facts['os_family'] == 'Debian' else 'sshd' }}"
+
+  tasks:
+
+  - name: Install rsync
+    package:
+      name: rsync
+      state: present
+
+  - name: Create uploader user
+    user:
+      name: uploader
+      shell: /bin/bash
+      create_home: true
+
+  - name: Create game directory
+    file:
+      path: /srv/games
+      state: directory
+      owner: uploader
+      group: uploader
+      mode: "0755"
+
+  - name: Create deploy key access
+    authorized_key:
+      user: uploader
+      key: "{{ lookup('file', 'deploy_key/github_deploy.pub') }}"
+
+  - name: Restrict SSH access for uploader
+    blockinfile:
+      path: /etc/ssh/sshd_config
+      block: |
+        Match User uploader
+            AllowTcpForwarding no
+            X11Forwarding no
+            PermitTTY no
+
+  - name: Restart SSH
+    service:
+      name: "{{ ssh_service }}"
+      state: restarted
