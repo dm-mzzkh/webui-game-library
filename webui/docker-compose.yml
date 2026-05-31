@@ -1,0 +1,10 @@
+services:
+  webui:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      SITE_TITLE: "Game Library"
+    volumes:
+      - ${GAMES_DIR:-/srv/games}:/srv/games:ro
+    restart: unless-stopped

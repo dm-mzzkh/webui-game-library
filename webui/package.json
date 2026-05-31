@@ -1,0 +1,17 @@
+{
+  "name": "webui-game-library",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Web library that lists and serves Godot 4 HTML5 game exports with cross-origin isolation.",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
