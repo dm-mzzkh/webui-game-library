@@ -1,10 +1,36 @@
 services:
+  # Full access, no auth. Expose ONLY on the Tailnet (e.g. via the
+  # tailscale-only nginx on the bastion -> this :8080).
   webui:
     build: .
+    environment:
+      ACCESS_MODE: full
+      SITE_TITLE: "Game Library"
+      # Public base address of webui-public — used by the admin UI to render
+      # full share links (e.g. https://games.example.com). Optional.
+      PUBLIC_URL: ${PUBLIC_URL:-}
+    volumes:
+      - ./test/games:/srv/games:ro
+      - shares:/data
     ports:
       - "8080:8080"
-    environment:
-      SITE_TITLE: "Game Library"
-    volumes:
-      - ${GAMES_DIR:-/srv/games}:/srv/games:ro
     restart: unless-stopped
+
+  # Public internet. No library, no open game access — only password-gated
+  # /s/<uuid> share links. Put a TLS reverse proxy in front of this :8081.
+  webui-public:
+    build: .
+    environment:
+      ACCESS_MODE: public
+      SITE_TITLE: "Game Library"
+      SHARE_SECRET: ${SHARE_SECRET:?set SHARE_SECRET in .env}
+      COOKIE_SECURE: "1"
+    volumes:
+      - ./test/games:/srv/games:ro
+      - shares:/data
+    ports:
+      - "8081:8080"
+    restart: unless-stopped
+
+volumes:
+  shares:
