@@ -10,6 +10,7 @@
 //                      a password, limited to the game/version the link is bound to.
 
 const express = require('express');
+const compression = require('compression');
 const fs = require('fs');
 const path = require('path');
 const auth = require('./auth');
@@ -56,7 +57,11 @@ function sendGameFile(res, slug, version, rel) {
   const base = dir(slug, version);
   const file = path.resolve(base, rel || 'index.html');
   if (file !== base && !file.startsWith(base + path.sep)) return res.status(403).end();
-  res.sendFile(file, (err) => { if (err && !res.headersSent) res.status(404).end(); });
+  // Versioned dirs are immutable; only the "current" symlink changes content.
+  const cache = version === 'current' ? 'no-cache' : 'public, max-age=31536000, immutable';
+  res.sendFile(file, { headers: { 'Cache-Control': cache } }, (err) => {
+    if (err && !res.headersSent) res.status(404).end();
+  });
 }
 
 // --- views ----------------------------------------------------------------
@@ -180,6 +185,11 @@ function player(slug, active, opts = {}) {
       + '</select>';
   }
 
+  // Point the iframe at the resolved build dir, not the mutable "current"
+  // symlink, so its assets get the immutable 1y cache across reloads. The
+  // selector and share link still use the logical version ("current").
+  const srcVersion = (active === 'current' ? currentTarget(slug) : null) || active;
+
   // Share button + dialog (full mode only): creates a public link for this game.
   const shareBtn = share ? "<button onclick=\"document.getElementById('sd').showModal()\">Share</button>" : '';
   const shareDlg = share ? `<dialog id="sd" class="dlg">
@@ -212,7 +222,7 @@ function player(slug, active, opts = {}) {
 
   return page(`${label} — ${TITLE}`, `<div class="player">
     <div class="bar">${chrome}${shareBtn}<button onclick="f.requestFullscreen()">Fullscreen</button></div>
-    <iframe id="f" src="/games/${slug}/${active}/index.html" title="${esc(slug)}"
+    <iframe id="f" src="/games/${slug}/${srcVersion}/index.html" title="${esc(slug)}"
       allow="cross-origin-isolated;fullscreen;autoplay;gamepad" allowfullscreen></iframe>
     </div>${shareDlg}`);
 }
@@ -231,6 +241,18 @@ function authForm(token, error) {
 
 const app = express();
 app.disable('x-powered-by');
+
+// Compress responses — the big win for game loads over the public internet
+// (the Godot engine .wasm is tens of MB and gzips down several-fold).
+// .wasm isn't reliably flagged compressible, so force it; .pck stays raw
+// (it's mostly already-compressed assets, so gzipping it just burns CPU).
+app.use(compression({
+  filter: (req, res) => {
+    if (String(res.getHeader('Content-Type') || '').includes('wasm')) return true;
+    return compression.filter(req, res);
+  },
+}));
+
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
@@ -241,6 +263,9 @@ app.use((req, res, next) => {
   res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
   next();
 });
+
+// Browsers auto-request this; answer quietly instead of logging a 404.
+app.get('/favicon.ico', (req, res) => res.status(204).end());
 
 if (!PUBLIC) {
   // ---- FULL mode (Tailnet) ----
