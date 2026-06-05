@@ -53,6 +53,15 @@ function listGames() {
   try { return fs.readdirSync(GAMES_DIR).filter(playable).sort(); } catch { return []; }
 }
 
+// Build metadata written by the deploy pipeline (commit, author, dates...).
+function versionInfo(slug, version) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(dir(slug, version), 'version.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 function sendGameFile(res, slug, version, rel) {
   const base = dir(slug, version);
   const file = path.resolve(base, rel || 'index.html');
@@ -81,7 +90,8 @@ padding:12px 14px}.badge{position:absolute;top:8px;right:8px;background:#0e0f13c
 font-size:.72rem;padding:2px 8px;border-radius:999px}.muted{color:#9aa0ad;padding:0 28px}
 .player{display:flex;flex-direction:column;height:100vh}.bar{display:flex;align-items:center;
 gap:14px;padding:10px 16px;background:#181a21;border-bottom:1px solid #262a35}.bar a{color:#6c8cff;
-font-weight:600}.bar .sp{margin-left:auto}select,.bar button{background:#20232d;color:#e7e9ee;
+font-weight:600}.bar .sp{margin-left:auto}.bar .ver{color:#9aa0ad;font-size:.82rem;max-width:42vw;
+overflow:hidden;text-overflow:ellipsis;white-space:nowrap}select,.bar button{background:#20232d;color:#e7e9ee;
 border:1px solid #2c313d;border-radius:8px;padding:7px 12px;cursor:pointer;font:inherit}
 iframe{flex:1;width:100%;border:0;background:#000}.box{max-width:340px;margin:12vh auto;padding:0 20px}
 .box input{width:100%;padding:10px 12px;border-radius:8px;border:1px solid #2c313d;background:#20232d;
@@ -173,12 +183,24 @@ function adminPage({ created } = {}) {
 
 function player(slug, active, opts = {}) {
   const { label = slug, back = '/', selectBase = `/play/${slug}/`, share = false } = opts;
+  // Commit message of the active version, shown next to the title.
+  const info = versionInfo(slug, active);
+  const commit = info ? `${info.short_version || ''}${info.commit_message ? ` · ${info.commit_message}` : ''}` : '';
   let chrome = back ? `<a href="${esc(back)}">&larr; Library</a>` : '';
-  chrome += `<b>${esc(label)}</b><span class="sp"></span>`;
+  chrome += `<b>${esc(label)}</b>`;
+  if (commit) chrome += `<span class="ver">${esc(commit)}</span>`;
+  chrome += '<span class="sp"></span>';
+
+  // Version options carry the commit message so you can pick a build by what changed.
   const target = currentTarget(slug);
+  const optText = (v) => {
+    const i = versionInfo(slug, v);
+    const short = (i && i.short_version) || (v === 'current' ? (target || 'latest') : v);
+    return { short, msg: i && i.commit_message ? ` — ${i.commit_message}` : '' };
+  };
   const list = [];
-  if (has(slug, 'current')) list.push({ v: 'current', label: target ? `current (latest: ${target})` : 'current (latest)' });
-  for (const v of versions(slug)) list.push({ v, label: v === target ? `${v} (current)` : v });
+  if (has(slug, 'current')) { const t = optText('current'); list.push({ v: 'current', label: `current: ${t.short}${t.msg}` }); }
+  for (const v of versions(slug)) { const t = optText(v); list.push({ v, label: `${t.short}${v === target ? ' (current)' : ''}${t.msg}` }); }
   if (list.length > 1) {
     chrome += `<select onchange="location.href='${selectBase}'+this.value">`
       + list.map((o) => `<option value="${o.v}"${o.v === active ? ' selected' : ''}>${esc(o.label)}</option>`).join('')
@@ -369,7 +391,7 @@ if (!PUBLIC) {
       const v = defaultVersion(s.slug);
       if (!v) continue;
       seen.add(s.slug);
-      const name = s.label || s.slug;
+      const name = s.slug; // web library names games by their games/ folder, not the label
       const cover = fs.existsSync(path.join(dir(s.slug, v), 'cover.png'))
         ? `<div class="cover"><img src="/games/${s.slug}/${v}/cover.png" alt="" loading="lazy"></div>`
         : `<div class="cover">${esc(name[0].toUpperCase())}</div>`;
@@ -392,7 +414,7 @@ if (!PUBLIC) {
       // Any version of this game is allowed; ?v= selects, default = pinned/current.
       const active = (valid(req.query.v) && has(share.slug, req.query.v)) ? req.query.v : fallback;
       return res.type('html').send(player(share.slug, active, {
-        label: share.label, back: '/', selectBase: `/s/${token}?v=`,
+        back: '/', selectBase: `/s/${token}?v=`,
       }));
     }
     res.type('html').send(authForm(token));
